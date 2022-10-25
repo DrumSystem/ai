@@ -22,7 +22,7 @@ type Map struct {
 ### 查询
 先去read中读， read中不存在就去dirty中读， 此时miss++， 如果miss>len(dirty)，将dirty赋值给read，将dirty置为nil
 - 直接赋值是因为写操作只会操作dirty，所以保证了dirty是最新的，并且数据集是肯定包含read的
-- 将diryt置为nil？？要是再经过写操作，dirty赋值给read，然后查询以前的数据那不是丢失了？？？--后面提到会将
+- 将diryt置为nil？？要是再经过写操作，dirty赋值给read，然后查询以前的数据那不是丢失了？？？--后面提到会将定期进行dirty的刷新
 
 ### 删
 在read查找需要删除的元素， 找到将值标记为nil(标记删除)， 否则在dirty中查找， 找到直接删除
