@@ -120,3 +120,204 @@ func main() {
 $ go run main.go
 3 3 3
 ```
+
+## Select
+select 结构的执行过程与实现原理
+- 空的 select 语句会被转换成调用 runtime.block 直接挂起当前 Goroutine；
+- 如果 select 语句中只包含一个 case，编译器会将其转换成 if ch == nil { block }; n; 表达式；
+  - 首先判断操作的 Channel 是不是空的；
+  - 然后执行 case 结构中的内容；
+- 如果 select 语句中只包含两个 case 并且其中一个是 default，那么会使用 runtime.selectnbrecv 和 runtime.selectnbsend 非阻塞地执行收发操作； 在默认情况下会通过 runtime.selectgo 获取执行 case 的索引，并通过多个 if 语句执行对应 case 中的代码； 
+
+在编译器已经对 select 语句进行优化之后，Go 语言会在运行时执行编译期间展开的 runtime.selectgo 函数，该函数会按照以下的流程执行：
+- 随机生成一个遍历的轮询顺序 pollOrder 并根据 Channel 地址生成锁定顺序 lockOrder；
+  - 轮询顺序：通过 runtime.fastrandn 函数引入随机性,可以避免 Channel 的饥饿问题，保证公平性
+  - 加锁顺序：按照 Channel 的地址排序后确定加锁顺序, 能够避免死锁的发生
+- 根据 pollOrder 遍历所有的 case 查看是否有可以立刻处理的 Channel；
+  - 如果存在，直接获取 case 对应的索引并返回；
+  - 如果不存在，创建 runtime.sudog 结构体，将当前 Goroutine 加入到所有相关 Channel 的收发队列，并调用 runtime.gopark 挂起当前 Goroutine 等待调度器的唤醒；
+- 当调度器唤醒当前 Goroutine 时，会再次按照 lockOrder 遍历所有的 case，从中查找需要被处理的 runtime.sudog 对应的索引
+
+## defer
+- 堆上分配内存
+  - 编译器会将defer关键字转换成deferproc，并在函数返回调用前插入derferreturn
+  - deferproc会将一个defer结构体追加到当前goroutine的链表上
+  - derferreturn会从goroutine的链表中取出runtime结构体并依次执行
+- 栈上分配
+  - 当该关键字在函数体中最多执行一次时，会将结构体分配到栈上并调用 runtime.deferprocStack；
+- 开放编码 
+  - 编译期间判断 defer 关键字、return 语句的个数确定是否开启开放编码优化；defer数量小于8， defer * return < 15
+后调用的 defer 函数会先执行:
+  - 后调用的 defer 函数会被追加到 Goroutine _defer 链表的最前面；
+  - 运行 runtime._defer 时是从前到后依次执行
+函数的参数会被预先计算
+  - 调用 runtime.deferproc 函数创建新的延迟调用时就会立刻拷贝函数的参数，函数的参数不会等到真正执行时计算；
+
+## panic and recover
+panic 能够改变程序的控制流，调用 panic 后会立刻停止执行当前函数的剩余代码，并在当前 Goroutine 中递归执行调用方的 defer；
+recover 可以中止 panic 造成的程序崩溃。它是一个只能在 defer 中发挥作用的函数，在其他作用域中调用不会发挥作用；
+- panic 只会触发当前 Goroutine 的 defer
+- recover 只有在 defer 中调用才会生效；
+- panic 允许在 defer 中嵌套多次调用；
+
+## make and new
+make 的作用是初始化内置的数据结构，切片、哈希表和 Channel；
+new 的作用是根据传入的类型分配一片内存空间并返回指向这片内存空间的指针；
+
+
+# 并发编程
+## channel 实现
+channel内部（缓冲区）使用使用循环队列构建， 记录发送接收操作的位置
+- qcount — Channel 中的元素个数；
+- dataqsiz — Channel 中的循环队列的长度；
+- buf — Channel 的缓冲区数据指针；
+- sendx — Channel 的发送操作处理到的位置
+- recvx — Channel 的接收操作处理到的位置；
+sendq 和 recvq 存储了当前 Channel 由于缓冲区空间不足而阻塞的 Goroutine 列表， 数据结构为使用双向链表。
+
+```go
+type hchan struct {
+qcount   uint
+dataqsiz uint
+buf      unsafe.Pointer
+elemsize uint16
+closed   uint32
+elemtype *_type
+sendx    uint
+recvx    uint
+recvq    waitq
+sendq    waitq
+}
+```
+发送数据
+- 如果当前 Channel 的 recvq 上存在已经被阻塞的 Goroutine，那么会直接将数据发送给当前 Goroutine 并将其设置成下一个运行的 Goroutine；
+- 如果 Channel 存在缓冲区并且其中还有空闲的容量，我们会直接将数据存储到缓冲区 sendx 所在的位置上，
+- 如果不满足上面的两种情况，会创建一个 runtime.sudog 结构并将其加入 Channel 的 sendq 队列中，当前 Goroutine 也会陷入阻塞等待其他的协程从 Channel 接收数据； 
+
+触发调度的时机
+- 发送数据时发现 Channel 上存在等待接收数据的 Goroutine，立刻设置处理器的 runnext 属性，但是并不会立刻触发调度，等到下一次调度唤醒数据接收方
+- 发送数据时并没有找到接收方并且缓冲区已经满了，这时会将自己加入 Channel 的 sendq 队列， 让出处理器的使用权
+
+接收数据
+- 如果 Channel 为空，那么会直接调用 runtime.gopark 挂起当前 Goroutine
+- 如果 Channel 已经关闭并且缓冲区没有任何数据，runtime.chanrecv 会直接返回；
+- 如果 Channel 的 sendq 队列中存在挂起的 Goroutine，会将 recvx 索引所在的数据拷贝到接收变量所在的内存空间上并将 sendq 队列中 Goroutine 的数据拷贝到缓冲区；
+- 如果 Channel 的缓冲区中包含数据，那么直接读取 recvx 索引对应的数据；
+- 在默认情况下会挂起当前的 Goroutine，将 runtime.sudog 结构加入 recvq 队列并陷入休眠等待调度器的唤醒
+
+触发调度的时机
+- 当 Channel 为空时
+- 当缓冲区中不存在数据并且也不存在数据的发送者时；
+
+# 锁-同步原语
+## sync.Mutex 
+总共占8字节， 低三位分别表示 mutexLocked（锁状态）、mutexWoken（正常） 和 mutexStarving（饥饿），剩下的位置用来表示当前有多少个 Goroutine 在等待互斥锁的释放
+
+饥饿模式是保证互斥锁的公平性， 互斥锁会直接交给等待队列最前面的 Goroutine。新的 Goroutine 在该状态下不能获取锁、也不会进入自旋状态，它们只会在队列的末尾等待
+如果一个 Goroutine 获得了互斥锁并且它在队列的末尾或者它等待的时间少于 1ms，那么当前的互斥锁就会切换回正常模式
+```go
+type Mutex struct {
+	state int32
+	sema  uint32
+}
+```
+
+## sync.RWMutex
+```go
+type RWMutex struct {
+	w           Mutex 复用互斥锁提供的能力；
+	writerSem   uint32 分别用于写等待读和读等待写：
+	readerSem   uint32 
+	readerCount int32 存储了当前正在执行的读操作数量；
+	readerWait  int32 表示当写操作被阻塞时等待的读操作个数；
+}
+```
+写锁的获取 
+- 调用结构体持有的 sync.Mutex 结构体的 sync.Mutex.Lock 阻塞后续的写操作
+  - 因为互斥锁已经被获取，其他 Goroutine 在获取写锁时会进入自旋或者休眠；
+- 调用 sync/atomic.AddInt32 函数阻塞后续的读操作
+- 如果仍然有其他 Goroutine 持有互斥锁的读锁， 该 Goroutine会进入休眠状态等待所有读锁所有者执行结束后释放 writerSem 信号量将当前协程唤醒；
+
+写锁的释放
+- 调用 sync/atomic.AddInt32 函数将 readerCount 变回正数，释放读锁
+- 通过 for 循环释放所有因为获取读锁而陷入等待的 Goroutine：
+- 调用 sync.Mutex.Unlock 释放写锁；
+
+读锁的获取
+sync.RWMutex.RLock该方法会通过 sync/atomic.AddInt32 将 readerCount 加一
+- 如果该方法返回负数 — 其他 Goroutine 获得了写锁， 陷入休眠，等待其他所的释放
+- 如果该方法的结果为非负数 — 没有 Goroutine 获得写锁，当前方法会成功返回
+
+读锁的释放
+调用sync.RWMutex.RUnlock方法， 减少正在读资源的 readerCount 整数
+- 如果返回值大于等于零 — 读锁直接解锁成功；
+- 如果返回值小于零 — 有一个正在执行的写操作（写操作会将readerCount置为0， 完成后会恢复），在这时会调用sync.RWMutex.rUnlockSlow 方法；减少获取锁的写操作等待的读操作数 readerWait 并在所有读操作都被释放之后触发写操作的信号量 writerSem，该信号量被触发时，调度器就会唤醒尝试获取写锁的 Goroutine。
+
+## sync.WaitGroup
+可以等待一组 Goroutine 的返回，一个比较常见的使用场景是批量发出 RPC 或者 HTTP 请求：
+
+## sync.Once 
+可以保证在 Go 程序运行期间的某段代码只会执行一次。通过成员变量 done(初始为0，执行一次过后变为1) 确保函数不会执行第二次
+```go
+type Once struct {
+	done uint32
+	m    Mutex
+}
+```
+
+## sync.Cond
+可以让一组的 Goroutine 都在满足特定条件时被唤醒。每一个 sync.Cond 结构体在初始化时都需要传入一个互斥锁
+
+- 10 个 Goroutine 通过 sync.Cond.Wait 等待特定条件的满足；
+- 1 个 Goroutine 会调用 sync.Cond.Broadcast 唤醒所有陷入等待的 Goroutine；
+- 调用 sync.Cond.Broadcast 方法后，上述代码会打印出 10 次 “listen” 并结束调用。
+```go
+var status int64
+
+func main() {
+	c := sync.NewCond(&sync.Mutex{})
+	for i := 0; i < 10; i++ {
+		go listen(c)
+	}
+	time.Sleep(1 * time.Second)
+	go broadcast(c)
+
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt)
+	<-ch
+}
+
+func broadcast(c *sync.Cond) {
+	c.L.Lock()
+	atomic.StoreInt64(&status, 1)
+	c.Broadcast()
+	c.L.Unlock()
+}
+
+func listen(c *sync.Cond) {
+	c.L.Lock()
+	for atomic.LoadInt64(&status) != 1 {
+		c.Wait()
+	}
+	fmt.Println("listen")
+	c.L.Unlock()
+}
+
+$ go run main.go
+listen
+...
+listen
+```
+
+Cond数据结构
+```go
+type Cond struct {
+	noCopy  noCopy
+	L       Locker
+	notify  notifyList // 维护等待的goroutine， 是一个链表
+	checker copyChecker
+}
+```
+sync.Cond.Wait 方法会将当前 Goroutine 陷入休眠状态， 将链表加入到链表末端。
+sync.Cond.Signal 方法会唤醒队列最前面的 Goroutine；
+sync.Cond.Broadcast 方法会唤醒队列中全部的 Goroutine；
