@@ -71,3 +71,103 @@ Radix Tree的计数统计原理和Trie Tree极为相似，一个最大的区别�
 - 对文件的读取操作跨过了页缓存，减少了数据的拷贝次数，用内存读写取代I/O读写，提高了文件读取效率
 - mmap的关键点是实现了用户空间和内核空间的数据直接交互而省去了空间不同数据不通的繁琐过程
 - 适合读多写少的场景
+
+## Go unsafe.pointer 
+go语言对指针做了很多限制-类型安全
+- Go的指针不能进行数学运算
+- 不同类型的指针不能相互转换
+- 不同类型的指针不能使用==或!=比较
+
+unsafe.pointer 可以绕过 Go 语言的类型系统，直接操作内存。例如，一般我们不能操作一个结构体的未导出成员，但是通过 unsafe 包就能做到。unsafe 包让我可以直接读写内存，还管你什么导出还是未导出。
+```go
+    type ArbitraryType int // ArbitraryType 任意的意思
+    type Pointer *ArbitraryType //指向任意类型的指针
+    func Sizeof(x ArbitraryType) uintptr // 返回类型 x 所占据的字节数 unsafe.Sizeof(unsafe.Pointer(&s))
+    func Offsetof(x ArbitraryType) uintptr // 返回结构体成员在内存中的位置离结构体起始处的字节数，所传参数必须是结构体的成员
+	// 和 pb := &x.b 等价
+    //pb := (*int)(unsafe.Pointer(uintptr(unsafe.Pointer(&x)) + unsafe.Offsetof(x.b)))                       
+    func Alignof(x ArbitraryType) uintptr //返回变量对齐字节数量
+```
+上面三个函数的返回结果都是uintptr类型， uintptr类型可以进行数学运算，可以和unsafe.pointer相互转换。
+uintptr 并没有指针的语义（**并不是一个指针， 只是和当前指针有相同的数值**），意思就是 uintptr 所指向的对象会被 gc 无情地回收。而 unsafe.Pointer 有指针语义，可以保护它所指向的对象在“有用”的时候不会被垃圾回收。
+
+### unsafe 如何使用
+#### 获取slice字段值
+底层调用 func makeslice(et *_type, len, cap int) slice，返回slice结构体
+```go
+    // runtime/slice.go
+    type slice struct {
+        array unsafe.Pointer // 元素指针
+        len   int // 长度
+        cap   int // 容量
+    }
+```
+我们可以通过 unsafe.Pointer 和 uintptr 进行转换，得到 slice 的字段值
+```go
+    func main() {
+		// int 8 字节
+        s := make([]int, 9, 20)
+        var Len = *(*int)(unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + uintptr(8)))
+        fmt.Println(Len, len(s)) // 9 9
+        var Cap = *(*int)(unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + uintptr(16)))
+        fmt.Println(Cap, cap(s)) // 20 20
+    }
+```
+#### 获取map长度
+底层 func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap； 和 slice 不同的是，makemap 函数返回的是 hmap 的指针
+```go
+    type hmap struct {
+    count     int
+    flags     uint8
+    B         uint8
+    noverflow uint16
+    hash0     uint32
+    buckets    unsafe.Pointer
+    oldbuckets unsafe.Pointer
+    nevacuate  uintptr
+    extra *mapextra
+}
+    func main() {
+		// 只不过count变成了二级指针
+        mp := make(map[string]int)
+        mp["qcrao"] = 100
+        mp["stefno"] = 18
+        count := **(**int)(unsafe.Pointer(&mp))
+        fmt.Println(count, len(mp)) // 2 2
+    }
+```
+
+### 字符串和byte数组的零拷贝转换
+利用unsafe.pointer直接操作内存，共享底层的byte数组，实现零拷贝转换
+```go
+func main() {
+    s := "Hello World"
+    b := string2bytes(s)
+    fmt.Println(b)
+    s = bytes2string(b)
+    fmt.Println(s)
+}
+
+func string2bytes(s string) []byte {
+    //stringHeader := (*reflect.StringHeader)(unsafe.Pointer(&s))
+    //
+    //bh := reflect.SliceHeader{
+    //	Data: stringHeader.Data,
+    //	Len: stringHeader.Len,
+    //	Cap: stringHeader.Len,
+    //}
+	tmp1 := (*[3]uintptr)(unsafe.Pointer(&s))
+	tmp2 := [3]uintptr{tmp1[0], tmp1[1], tmp1[2]}
+	return *(*[]byte)(unsafe.Pointer(&tmp2))
+	//return *(*[]byte)(unsafe.Pointer(&bh))
+}
+
+func bytes2string(b []byte) string {
+sliceHeader := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	sh := reflect.StringHeader{
+		Data: sliceHeader.Data,
+		Len:  sliceHeader.Len,
+	}
+	return *(*string)(unsafe.Pointer(&sh))
+}
+```
