@@ -289,7 +289,7 @@ func SafeClose(ch chan T) (justClosed bool) {
 
 礼貌的方式: 使用 sync.Once 或互斥锁(sync.Mutex)确保 channel 只被关闭一次。
 ```go
-type MyChannel struct {
+ype MyChannel struct {
 	C    chan T
 	once sync.Once
 }

@@ -211,9 +211,9 @@ sendq    waitq
 
 # 锁-同步原语
 ## sync.Mutex 
-总共占8字节， 低三位分别表示 mutexLocked（锁状态）、mutexWoken（正常）[先进先出] 和 mutexStarving（饥饿），剩下的位置用来表示当前有多少个 Goroutine 在等待互斥锁的释放
+总共占8字节， 低三位分别表示 mutexLocked（锁状态）、mutexWoken（正常） 和 mutexStarving（饥饿），剩下的位置用来表示当前有多少个 Goroutine 在等待互斥锁的释放
 
-饥饿模式是保证互斥锁的公平性， 互斥锁会直接交给等待队列最前面的 Goroutine。新的 Goroutine 在该状态下不能获取锁、也不会进入自旋状态，它们只会在队列的末尾等待；
+饥饿模式是保证互斥锁的公平性， 互斥锁会直接交给等待队列最前面的 Goroutine。新的 Goroutine 在该状态下不能获取锁、也不会进入自旋状态，它们只会在队列的末尾等待
 如果一个 Goroutine 获得了互斥锁并且它在队列的末尾或者它等待的时间少于 1ms，那么当前的互斥锁就会切换回正常模式
 ```go
 type Mutex struct {
@@ -221,8 +221,6 @@ type Mutex struct {
 	sema  uint32
 }
 ```
-
-锁的自旋：goroutine会一直占用CPU，持续监听某个条件是否为真，满足条件立刻切换。自旋可以避免goroutine的随意切换
 
 ## sync.RWMutex
 ```go
@@ -237,7 +235,7 @@ type RWMutex struct {
 写锁的获取 
 - 调用结构体持有的 sync.Mutex 结构体的 sync.Mutex.Lock 阻塞后续的写操作
   - 因为互斥锁已经被获取，其他 Goroutine 在获取写锁时会进入自旋或者休眠；
-- 调用 sync/atomic.AddInt32 函数阻塞后续的读操作 readerCount为负数后续的读操作自动被阻塞
+- 调用 sync/atomic.AddInt32 函数阻塞后续的读操作
 - 如果仍然有其他 Goroutine 持有互斥锁的读锁， 该 Goroutine会进入休眠状态等待所有读锁所有者执行结束后释放 writerSem 信号量将当前协程唤醒；
 
 写锁的释放
@@ -247,7 +245,7 @@ type RWMutex struct {
 
 读锁的获取
 sync.RWMutex.RLock该方法会通过 sync/atomic.AddInt32 将 readerCount 加一
-- 如果该方法返回负数 — 其他 Goroutine 获得了写锁， 陷入休眠，等待其他锁的释放
+- 如果该方法返回负数 — 其他 Goroutine 获得了写锁， 陷入休眠，等待其他所的释放
 - 如果该方法的结果为非负数 — 没有 Goroutine 获得写锁，当前方法会成功返回
 
 读锁的释放
@@ -398,10 +396,6 @@ runtime.mspan是一个双向链表， 包含 next 和 prev 两个字段，它们
 插入写屏障会带来大量的额外开销，所以在实现上没有对栈上的对象开启，在扫描结束后会对栈上对象重新扫描；
 混合写屏障虽然不存在重新扫描的需要，但是它会带来比较多的冗余标记操作。
 结合两者可以避免栈的重扫，也可以减少一部分冗余的扫描和标记操作。
-
-### GC触发时机
-触发 GC 有俩个条件，一是堆内存的分配达到控制器计算的触发堆大小，初始大小环境变量 GOGC，之后堆内存达到上一次垃圾收集的 2 倍时才会触发 GC。
-二是如果一定时间内没有触发，就会触发新的循环，该触发条件由 runtime.forcegcperiod 变量控制，默认为 2 分钟。
 
 ### 增量与并发
 - 增量收集器：将原本时间较长的暂停时间切分成多个更小的 GC 时间片（需要三色标记法和写屏障）。
