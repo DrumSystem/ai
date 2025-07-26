@@ -1,0 +1,56 @@
+{
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "schemes": [
+    "https"
+  ],
+  "swagger": "2.0",
+  "info": {
+    "title": "InterviewAPP Chat API",
+    "version": "1.0"
+  },
+  "basePath": "/",
+  "paths": {
+    "/interview_app/chat/sse": {
+      "get": {
+        "produces": [
+          "application/json"
+        ],
+        "schemes": [
+          "https"
+        ],
+        "summary": "Go面试官聊天SSE流式接口",
+        "operationId": "chat",
+        "parameters": [
+          {
+            "type": "string",
+            "name": "message",
+            "in": "query",
+            "required": true
+          },
+          {
+            "type": "string",
+            "name": "chatId",
+            "in": "query",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {}
+          }
+        }
+      }
+    }
+  },
+  "x-date": "2025-07-24 14:44:56",
+  "x-description": "This is a goctl generated swagger file.",
+  "x-github": "https://github.com/zeromicro/go-zero",
+  "x-go-zero-doc": "https://go-zero.dev/",
+  "x-goctl-version": "1.8.5"
+}
