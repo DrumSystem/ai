@@ -10,9 +10,15 @@ import (
 func do(taskCh chan int) {
 	for {
 		select {
-		case t := <-taskCh:
+		case t, beforeClosed := <-taskCh:
+			if !beforeClosed {
+				fmt.Println("taskCh has closed!")
+				return
+			}
 			time.Sleep(time.Millisecond)
 			fmt.Printf("task %d is done\n", t)
+		//default:
+		//	return
 		}
 	}
 }
@@ -23,6 +29,7 @@ func sendTasks() {
 	for i := 0; i < 1000; i++ {
 		taskCh <- i
 	}
+	close(taskCh)
 }
 
 func TestDo(t *testing.T) {
@@ -30,4 +37,5 @@ func TestDo(t *testing.T) {
 	sendTasks()
 	time.Sleep(time.Second)
 	t.Log(runtime.NumGoroutine())
+	//sort.Slice()
 }
