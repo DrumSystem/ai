@@ -20,6 +20,13 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				Path:    "/api/ai/interview_app/chat/sse",
 				Handler: ChatHandler(serverCtx),
 			},
+
+			{
+				// 知识库上传接口
+				Method:  http.MethodPost,
+				Path:    "/api/ai/knowledge/upload",
+				Handler: KnowledgeUploadHandler(serverCtx),
+			},
 		},
 	)
 }

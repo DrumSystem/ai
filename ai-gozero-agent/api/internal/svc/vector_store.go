@@ -2,6 +2,7 @@ package svc
 
 import (
 	"ai-gozero-agent/api/internal/config"
+	"ai-gozero-agent/api/internal/utils"
 	"context"
 	"encoding/json"
 	"errors"
@@ -60,9 +61,9 @@ func (vs *VectorStore) SaveMessage(chatId, role, content string) error {
 		return fmt.Errorf("序列化嵌入失败: %w", err)
 	}
 
-	// 插入数据库
-	sql := `INSERT INTO vector_store (chat_id, role, content, embedding) 
-            VALUES ($1, $2, $3, $4)`
+	// 添加source_type字段
+	sql := `INSERT INTO vector_store (chat_id, role, content, embedding, source_type) 
+            VALUES ($1, $2, $3, $4, 'message')`
 	_, err = vs.Pool.Exec(context.Background(), sql,
 		chatId, role, content, embeddingJSON)
 
@@ -134,4 +135,73 @@ func (vs *VectorStore) TestConnection() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return vs.Pool.Ping(ctx)
+}
+
+// 添加保存知识库的方法
+func (vs *VectorStore) SaveKnowledge(title, content string, cfg config.VectorDBConfig) error {
+	fmt.Println("进入保存处理逻辑！！：", cfg.Knowledge.MaxChunkSize)
+	chunks := utils.SplitText(content, cfg.Knowledge.MaxChunkSize)
+	fmt.Println("分块处理内容")
+	for _, chunk := range chunks {
+		embedding, err := vs.generateEmbedding(chunk)
+		if err != nil {
+			return fmt.Errorf("生成嵌入失败: %w", err)
+		}
+
+		embeddingJSON, err := json.Marshal(embedding)
+		if err != nil {
+			return fmt.Errorf("序列化嵌入失败: %w", err)
+		}
+
+		sql := `INSERT INTO knowledge_base (title, content, embedding) 
+             VALUES ($1, $2, $3)`
+		_, err = vs.Pool.Exec(context.Background(), sql, title, chunk, embeddingJSON)
+		if err != nil {
+			return err
+		}
+		fmt.Println("插入成功！！：")
+
+	}
+	return nil
+}
+
+// 添加检索知识库的方法
+func (vs *VectorStore) RetrieveKnowledge(query string, topK int) ([]types.KnowledgeChunk, error) {
+	queryEmbedding, err := vs.generateEmbedding(query)
+	if err != nil {
+		return nil, fmt.Errorf("生成嵌入失败: %w", err)
+	}
+
+	queryEmbeddingJSON, err := json.Marshal(queryEmbedding)
+	if err != nil {
+		return nil, fmt.Errorf("序列化嵌入失败: %w", err)
+	}
+
+	// 使用余弦相似度检索
+	sql := `SELECT id, title, content 
+          FROM knowledge_base 
+          ORDER BY embedding::jsonb::text <-> $1::text
+          LIMIT $2`
+
+	rows, err := vs.Pool.Query(context.Background(), sql, queryEmbeddingJSON, topK)
+	if err != nil {
+		return nil, fmt.Errorf("知识检索失败: %w", err)
+	}
+	defer rows.Close()
+
+	var knowledgeChunks []types.KnowledgeChunk
+	for rows.Next() {
+		var id int64
+		var title, content string
+		if err := rows.Scan(&id, &title, &content); err != nil {
+			return nil, fmt.Errorf("行扫描失败: %w", err)
+		}
+		knowledgeChunks = append(knowledgeChunks, types.KnowledgeChunk{
+			ID:      id,
+			Title:   title,
+			Content: content,
+		})
+
+	}
+	return knowledgeChunks, nil
 }
