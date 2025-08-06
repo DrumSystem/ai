@@ -12,6 +12,7 @@ type ServiceContext struct {
 	Config       config.Config
 	OpenAIClient *openai.Client
 	VectorStore  *VectorStore // 替换SessionStore
+	PdfClient    *PdfClient
 }
 
 func NewServiceContext(c config.Config) *ServiceContext {
@@ -44,5 +45,6 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		Config:       c,
 		OpenAIClient: openAIClient,
 		VectorStore:  vectorStore,
+		PdfClient:    NewPdfClient(c.MCP.Endpoint),
 	}
 }

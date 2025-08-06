@@ -1,0 +1,9 @@
+Name: mcp.rpc
+ListenOn: 0.0.0.0:8080
+Etcd:
+  Hosts:
+  - 127.0.0.1:2379
+  Key: mcp.rpc
+
+# UniPDF商业版许可证密钥
+UniPDFLicense: "76841cba2e0d669246f5cb36b2e6d38fa73b643065875c9b7dc978a187ff70ec"

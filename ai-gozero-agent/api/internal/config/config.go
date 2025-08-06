@@ -15,6 +15,9 @@ type Config struct {
 	}
 	VectorDB      VectorDBConfig // 新增向量数据库配置
 	UniPDFLicense string
+	MCP           struct {
+		Endpoint string
+	}
 }
 
 // VectorDBConfig 向量数据库配置
