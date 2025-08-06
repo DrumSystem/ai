@@ -2,7 +2,9 @@ package svc
 
 import (
 	"ai-gozero-agent/api/internal/config"
+	"context"
 	"fmt"
+	"github.com/redis/go-redis/v9"
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/unidoc/unipdf/v3/common/license"
 	"log"
@@ -13,6 +15,7 @@ type ServiceContext struct {
 	OpenAIClient *openai.Client
 	VectorStore  *VectorStore // 替换SessionStore
 	PdfClient    *PdfClient
+	Redis        *redis.Client
 }
 
 func NewServiceContext(c config.Config) *ServiceContext {
@@ -20,6 +23,18 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	openaiConfig := openai.DefaultConfig(c.OpenAI.ApiKey)
 	openaiConfig.BaseURL = c.OpenAI.BaseURL
 	openAIClient := openai.NewClientWithConfig(openaiConfig)
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     fmt.Sprintf("%s:%s", c.Redis.Host, c.Redis.Port),
+		Password: c.Redis.Password, // no password set
+		DB:       c.Redis.DB,
+	})
+
+	if _, err := rdb.Ping(context.Background()).Result(); err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	} else {
+		log.Println("Redis connected successfully")
+	}
 
 	// 初始化向量存储
 	vectorStore, err := NewVectorStore(c.VectorDB, openAIClient)
@@ -46,5 +61,6 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		OpenAIClient: openAIClient,
 		VectorStore:  vectorStore,
 		PdfClient:    NewPdfClient(c.MCP.Endpoint),
+		Redis:        rdb,
 	}
 }

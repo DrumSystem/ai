@@ -12,3 +12,11 @@ type InterviewAPPChatReq struct {
 	Message string `form:"message"`
 	ChatId  string `form:"chatId"`
 }
+
+const (
+	StateStart    = "start"
+	StateQuestion = "question"
+	StateFollowUp = "followUp"
+	StateEvaluate = "evaluate"
+	StateEnd      = "end"
+)
